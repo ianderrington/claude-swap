@@ -3092,6 +3092,48 @@ class TestConsumeFirstStrategy:
         assert outcome is TickOutcome.SWITCHED
         assert h.active_number() == 3
 
+    def _high_threshold_harness(self, temp_home: Path) -> EngineHarness:
+        # threshold=99.9 matches a real "consume as much as possible" config
+        # — high enough that a 97%%-used candidate still passes the ordinary
+        # "landing must itself be below threshold" gate, so these two tests
+        # isolate the SPENT_HEADROOM_PCT floor as the only thing left to
+        # decide the outcome, rather than accidentally re-testing that gate.
+        h = EngineHarness(temp_home, strategy="consume-first", threshold=99.9)
+        h.seed(1, "a@example.com")
+        h.seed(2, "b@example.com")
+        h.seed(3, "c@example.com")
+        h.make_live("a@example.com", 1)
+        return h
+
+    def test_skips_sooner_account_that_is_nearly_spent(self, temp_home):
+        """A sooner reset alone isn't enough — the candidate must have more
+        than SPENT_HEADROOM_PCT of headroom left, or the switch just trades a
+        real credential swap for a sliver of quota that's about to reset
+        anyway. Reproduces a real incident: active healthy at 55%% used,
+        candidate resets sooner but sits at 97%% used (3 pts headroom, right
+        at the spent floor) — must stay put rather than bounce there and
+        immediately need a second switch back."""
+        h = self._high_threshold_harness(temp_home)
+        outcome = h.tick_with_usage({
+            "1": _usage7(20, 55, _R_LATER),    # active, healthy, resets later
+            "2": _usage7(10, 97, _R_SOON),     # resets sooner, only 3 pts left
+            "3": _usage7(10, 20, _R_LATEST),   # resets latest, plenty of room
+        })
+        assert outcome is TickOutcome.NO_ACTION
+        assert h.active_number() == 1
+
+    def test_switches_to_sooner_account_just_above_the_spent_floor(self, temp_home):
+        """The floor is a hard boundary, not an accidental filter of every
+        low-headroom candidate — 4 points (just above SPENT_HEADROOM_PCT)
+        still qualifies as a real, worthwhile switch target."""
+        h = self._high_threshold_harness(temp_home)
+        outcome = h.tick_with_usage({
+            "1": _usage7(20, 55, _R_LATER),
+            "2": _usage7(10, 96, _R_SOON),     # 4 pts left — just above the floor
+        })
+        assert outcome is TickOutcome.SWITCHED
+        assert h.active_number() == 2
+
     def test_best_strategy_unaffected_below_threshold(self, temp_home):
         # Regression: default (best) still holds below threshold even when a
         # peer resets sooner — consume-first behavior must be opt-in.

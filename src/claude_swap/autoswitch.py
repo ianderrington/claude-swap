@@ -1931,10 +1931,26 @@ class AutoSwitchEngine:
                     # only move to accounts whose weekly window resets sooner
                     # than the active one (above the threshold we must move, so
                     # any healthy account qualifies and the sort picks soonest).
+                    #
+                    # A sooner reset alone is not enough — the candidate must
+                    # also have real headroom left, or the switch is a pure
+                    # loss: it lands on an account already at or below
+                    # SPENT_HEADROOM_PCT (the same "an edge is under two poll
+                    # intervals" floor the all_above tier above uses for the
+                    # identical concept), which resets soonest precisely
+                    # BECAUSE it's already nearly drained. Measured: switching
+                    # onto a peer sitting at 3 pts headroom cost a real
+                    # mid-session credential swap to salvage three points that
+                    # were gone again within the next half hour anyway, then
+                    # forced a SECOND disruptive swap back. Staying on a
+                    # healthy active account and letting a stranded peer's
+                    # sliver of quota expire unused is strictly better than
+                    # paying two switches to "save" it.
                     if trigger == "consume-first" and (
                         reset_ts is None
                         or active_reset_ts is None
                         or reset_ts >= active_reset_ts
+                        or h <= SPENT_HEADROOM_PCT
                     ):
                         continue
                 elif active_headroom is not None:
